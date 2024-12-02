@@ -253,3 +253,104 @@ anova(fit_null, fit_alt) |>
     ## 2 price ~ stars + borough + …       30523 9.21e8     2  8.42e7     1394.       0
 
 ## Nesting data 嵌套数据
+
+``` r
+nyc_airbnb |> 
+  lm(price ~ stars * borough + room_type * borough, data = _) |> 
+  broom::tidy() |> 
+  knitr::kable(digits = 3)
+```
+
+| term                                  | estimate | std.error | statistic | p.value |
+|:--------------------------------------|---------:|----------:|----------:|--------:|
+| (Intercept)                           |   95.694 |    19.184 |     4.988 |   0.000 |
+| stars                                 |   27.110 |     3.965 |     6.838 |   0.000 |
+| boroughBrooklyn                       |  -26.066 |    25.080 |    -1.039 |   0.299 |
+| boroughQueens                         |   -4.118 |    40.674 |    -0.101 |   0.919 |
+| boroughBronx                          |   -5.627 |    77.808 |    -0.072 |   0.942 |
+| room_typePrivate room                 | -124.188 |     2.996 |   -41.457 |   0.000 |
+| room_typeShared room                  | -153.635 |     8.692 |   -17.676 |   0.000 |
+| stars:boroughBrooklyn                 |   -6.139 |     5.237 |    -1.172 |   0.241 |
+| stars:boroughQueens                   |  -17.455 |     8.539 |    -2.044 |   0.041 |
+| stars:boroughBronx                    |  -22.664 |    17.099 |    -1.325 |   0.185 |
+| boroughBrooklyn:room_typePrivate room |   31.965 |     4.328 |     7.386 |   0.000 |
+| boroughQueens:room_typePrivate room   |   54.933 |     7.459 |     7.365 |   0.000 |
+| boroughBronx:room_typePrivate room    |   71.273 |    18.002 |     3.959 |   0.000 |
+| boroughBrooklyn:room_typeShared room  |   47.797 |    13.895 |     3.440 |   0.001 |
+| boroughQueens:room_typeShared room    |   58.662 |    17.897 |     3.278 |   0.001 |
+| boroughBronx:room_typeShared room     |   83.089 |    42.451 |     1.957 |   0.050 |
+
+``` r
+nest_lm_res =
+  nyc_airbnb |> 
+  nest(data = -borough) |> 
+  mutate(
+    models = map(data, \(df) lm(price ~ stars + room_type, data = df)),
+    results = map(models, broom::tidy)) |> 
+  select(-data, -models) |> 
+  unnest(results)
+
+nest_lm_res |> 
+  select(borough, term, estimate) |> 
+  mutate(term = fct_inorder(term)) |> 
+  pivot_wider(
+    names_from = term, values_from = estimate) |> 
+  knitr::kable(digits = 3)
+```
+
+| borough   | (Intercept) |  stars | room_typePrivate room | room_typeShared room |
+|:----------|------------:|-------:|----------------------:|---------------------:|
+| Bronx     |      90.067 |  4.446 |               -52.915 |              -70.547 |
+| Queens    |      91.575 |  9.654 |               -69.255 |              -94.973 |
+| Brooklyn  |      69.627 | 20.971 |               -92.223 |             -105.839 |
+| Manhattan |      95.694 | 27.110 |              -124.188 |             -153.635 |
+
+``` r
+manhattan_airbnb =
+  nyc_airbnb |> 
+  filter(borough == "Manhattan")
+
+manhattan_nest_lm_res =
+  manhattan_airbnb |> 
+  nest(data = -neighborhood) |> 
+  mutate(
+    models = map(data, \(df) lm(price ~ stars + room_type, data = df)),
+    results = map(models, broom::tidy)) |> 
+  select(-data, -models) |> 
+  unnest(results)
+```
+
+``` r
+manhattan_nest_lm_res |> 
+  filter(str_detect(term, "room_type")) |> 
+  ggplot(aes(x = neighborhood, y = estimate)) + 
+  geom_point() + 
+  facet_wrap(~term) + 
+  theme(axis.text.x = element_text(angle = 80, hjust = 1))
+```
+
+![](Linear_models_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
+
+``` r
+manhattan_airbnb |> 
+  lme4::lmer(price ~ stars + room_type + (1 + room_type | neighborhood), data = _) |> 
+  broom.mixed::tidy()
+```
+
+    ## Warning in checkConv(attr(opt, "derivs"), opt$par, ctrl = control$checkConv, :
+    ## Model failed to converge with max|grad| = 0.0045733 (tol = 0.002, component 1)
+
+    ## # A tibble: 11 × 6
+    ##    effect   group        term                       estimate std.error statistic
+    ##    <chr>    <chr>        <chr>                         <dbl>     <dbl>     <dbl>
+    ##  1 fixed    <NA>         (Intercept)                 250.        26.6      9.41 
+    ##  2 fixed    <NA>         stars                        -3.16       5.00    -0.631
+    ##  3 fixed    <NA>         room_typePrivate room      -124.         7.80   -15.9  
+    ##  4 fixed    <NA>         room_typeShared room       -157.        12.9    -12.2  
+    ##  5 ran_pars neighborhood sd__(Intercept)              59.3       NA       NA    
+    ##  6 ran_pars neighborhood cor__(Intercept).room_typ…   -0.987     NA       NA    
+    ##  7 ran_pars neighborhood cor__(Intercept).room_typ…   -1.00      NA       NA    
+    ##  8 ran_pars neighborhood sd__room_typePrivate room    36.7       NA       NA    
+    ##  9 ran_pars neighborhood cor__room_typePrivate roo…    0.992     NA       NA    
+    ## 10 ran_pars neighborhood sd__room_typeShared room     43.6       NA       NA    
+    ## 11 ran_pars Residual     sd__Observation             198.        NA       NA
