@@ -1,5 +1,5 @@
 ---
-title: "Linear_models"
+title: "Cross_Validation"
 author: "Shumei Liu"
 date: "2024-12-02"
 output: github_document
@@ -7,119 +7,126 @@ output: github_document
 
 ```{r}
 library(tidyverse)
-library(p8105.datasets)
+library(modelr)
+library(mgcv)
+library(SemiPar)
 
 set.seed(1)
 ```
 
-## Import data
+## CV “by hand”
 
 ```{r}
-data("nyc_airbnb")
+data(lidar)
 
-nyc_airbnb = 
-  nyc_airbnb |> 
-  mutate(stars = review_scores_location / 2) |> 
-  rename(
-    borough = neighbourhood_group,
-    neighborhood = neighbourhood) |> 
-  filter(borough != "Staten Island") |> 
-  select(price, stars, borough, neighborhood, room_type)
-```
+lidar_df = 
+  lidar |> 
+  as_tibble() |>
+  mutate(id = row_number())
 
-## Fit a model
-
-```{r}
-nyc_airbnb |>
-  ggplot(aes(x = stars, y = price, color = borough)) +
+lidar_df |> 
+  ggplot(aes(x = range, y = logratio)) + 
   geom_point()
 ```
 
 ```{r}
-fit = lm(price ~ stars + borough, data = nyc_airbnb)
+train_df = sample_frac(lidar_df, size = .8)
+test_df = anti_join(lidar_df, train_df, by = "id")
+
+ggplot(train_df, aes(x = range, y = logratio)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
 ```
 
 ```{r}
-nyc_airbnb = 
-  nyc_airbnb |> 
+linear_mod = lm(logratio ~ range, data = train_df)
+smooth_mod = mgcv::gam(logratio ~ s(range), data = train_df)
+wiggly_mod = mgcv::gam(logratio ~ s(range, k = 30), sp = 10e-6, data = train_df)
+```
+
+```{r}
+train_df |> 
+  add_predictions(smooth_mod) |> 
+  ggplot(aes(x = range, y = logratio)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+```
+
+```{r}
+train_df |> 
+  add_predictions(wiggly_mod) |> 
+  ggplot(aes(x = range, y = logratio)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red")
+```
+
+```{r}
+train_df |> 
+  gather_predictions(linear_mod, smooth_mod, wiggly_mod) |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = range, y = logratio)) + 
+  geom_point() + 
+  geom_line(aes(y = pred), color = "red") + 
+  facet_wrap(~model)
+```
+
+```{r}
+rmse(linear_mod, test_df)
+rmse(smooth_mod, test_df)
+rmse(wiggly_mod, test_df)
+```
+
+## CV using `modelr`
+
+```{r}
+cv_df = 
+  crossv_mc(lidar_df, 100) 
+```
+
+```{r}
+cv_df |> pull(train) |> nth(1) |> as_tibble()
+```
+
+```{r}
+cv_df |> pull(test) |> nth(1) |> as_tibble()
+```
+
+```{r}
+cv_df =
+  cv_df |> 
   mutate(
-    borough = fct_infreq(borough),
-    room_type = fct_infreq(room_type))
-
-fit = lm(price ~ stars + borough, data = nyc_airbnb)
-```
-
-## Tidying output
-
-```{r}
-fit
-
-summary(fit)
-summary(fit)$coef
-coef(fit)
-```
-
-```{r, include=FALSE}
-residuals(fit)
-```
-
-Let's look at the result better.
-
-The `broom` package has functions for obtaining a quick summary of the model and for cleaning up the coefficient table.
-```{r}
-broom::glance(fit)
-
-broom::tidy(fit)
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
 ```
 
 ```{r}
-fit |> 
-  broom::tidy() |> 
-  select(term, estimate, p.value) |> 
-  mutate(term = str_replace(term, "^borough", "Borough: ")) |> 
-  knitr::kable(digits = 3)
-```
-
-## Diagnostics 诊断
-
-```{r}
-modelr::add_residuals(nyc_airbnb, fit)
-```
-
-```{r}
-modelr::add_predictions(nyc_airbnb, fit)
+cv_df = 
+  cv_df |> 
+  mutate(
+    linear_mod  = map(train, \(df) lm(logratio ~ range, data = df)),
+    smooth_mod  = map(train, \(df) gam(logratio ~ s(range), data = df)),
+    wiggly_mod  = map(train, \(df) gam(logratio ~ s(range, k = 30), sp = 10e-6, data = df))) |> 
+  mutate(
+    rmse_linear = map2_dbl(linear_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_smooth = map2_dbl(smooth_mod, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_wiggly = map2_dbl(wiggly_mod, test, \(mod, df) rmse(model = mod, data = df)))
 ```
 
 ```{r}
-nyc_airbnb |> 
-  modelr::add_residuals(fit) |> 
-  ggplot(aes(x = borough, y = resid)) + geom_violin()
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
 ```
 
-```{r}
-nyc_airbnb |> 
-  modelr::add_residuals(fit) |> 
-  ggplot(aes(x = stars, y = resid)) + geom_point() +
-  facet_wrap(. ~ borough)
-```
+## Example: Child Growth
 
-## Hypothesis testing
 
-```{r}
-fit_null = lm(price ~ stars + borough, data = nyc_airbnb)
-fit_alt = lm(price ~ stars + borough + room_type, data = nyc_airbnb)
-```
-
-```{r}
-anova(fit_null, fit_alt) |> 
-  broom::tidy()
-```
-
-## Nesting data 嵌套数据
-
-```{r}
-
-```
 
 
 
